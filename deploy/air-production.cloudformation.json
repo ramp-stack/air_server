@@ -1,0 +1,805 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Air single-writer production host, encrypted persistent SQLite, retained backups and recovery alarms",
+  "Resources": {
+    "DataVolume": {
+      "Type": "AWS::EC2::Volume",
+      "Properties": {
+        "AvailabilityZone": "us-east-1a",
+        "Size": 100,
+        "VolumeType": "gp3",
+        "Encrypted": true,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          },
+          {
+            "Key": "Name",
+            "Value": "air-production-data"
+          },
+          {
+            "Key": "AirBackup",
+            "Value": "true"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "BackupBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": {
+          "Fn::Sub": "air-production-${AWS::AccountId}-${AWS::Region}"
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "retained-previous-versions",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 90
+              },
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "BucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "BackupBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "BackupBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${BackupBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Identity": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Name": "air/production/server-identity",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Logs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/air/production",
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "Alerts": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "TopicName": "air-production-alerts",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ],
+        "Subscription": [
+          {
+            "Endpoint": "caleb@orange.me",
+            "Protocol": "email"
+          }
+        ]
+      }
+    },
+    "ServerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "AirProductionResources",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket",
+                    "s3:GetBucketLocation"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "BackupBucket",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${BackupBucket.Arn}/sqlite/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${BackupBucket.Arn}/artifacts/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": {
+                    "Ref": "Identity"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogStreams"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Logs",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "cloudwatch:PutMetricData",
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "cloudwatch:namespace": [
+                        "AirServer",
+                        "CWAgent"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeVolumes",
+                    "ec2:DescribeVolumesModifications"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ec2:ModifyVolume",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${DataVolume}"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "ServerRole"
+          }
+        ]
+      }
+    },
+    "SecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Air production TLS and HTTP certificate validation; administration through SSM",
+        "VpcId": "vpc-08ceecbcb1ec240c7",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 5702,
+            "ToPort": 5702,
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Existing Air protocol clients; WSS preferred on 443"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      }
+    },
+    "Server": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-0ed59cbb87dfa8dba",
+        "InstanceType": "t3.medium",
+        "AvailabilityZone": "us-east-1a",
+        "SubnetId": "subnet-0e7279cd1a7849176",
+        "SecurityGroupIds": [
+          {
+            "Ref": "SecurityGroup"
+          }
+        ],
+        "IamInstanceProfile": {
+          "Ref": "InstanceProfile"
+        },
+        "DisableApiTermination": true,
+        "MetadataOptions": {
+          "HttpTokens": "required",
+          "HttpPutResponseHopLimit": 1
+        },
+        "Monitoring": true,
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/xvda",
+            "Ebs": {
+              "VolumeSize": 30,
+              "VolumeType": "gp3",
+              "Encrypted": true,
+              "DeleteOnTermination": false
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash\nset -eu\ndnf install -y nginx certbot python3-pip amazon-cloudwatch-agent gcc gcc-c++ make cmake openssl-devel xfsprogs jq\nuseradd --system --home-dir /var/lib/air --shell /sbin/nologin air\nmkdir -p /etc/air /opt/air /var/lib/air /var/log/air\nVOL_ID='${DataVolume}'\nSERIAL=$(echo \"$VOL_ID\" | tr -d '-')\nDEVICE=''\nfor n in $(seq 1 90); do\n DEVICE=$(lsblk -ndo NAME,SERIAL | awk -v id=\"$SERIAL\" '$2==id {print \"/dev/\"$1}')\n [ -n \"$DEVICE\" ] && break\n sleep 2\ndone\ntest -b \"$DEVICE\"\nif ! blkid \"$DEVICE\"; then mkfs.xfs \"$DEVICE\"; fi\nUUID=$(blkid -s UUID -o value \"$DEVICE\")\necho \"UUID=$UUID /var/lib/air xfs defaults,nofail 0 2\" >> /etc/fstab\nmount /var/lib/air\nchown air:air /var/lib/air /var/log/air\nchmod 750 /var/lib/air /etc/air /var/log/air\naws secretsmanager get-secret-value --region us-east-1 --secret-id '${Identity}' --query SecretString --output text > /etc/air/identity.json\nchown root:air /etc/air/identity.json\nchmod 640 /etc/air/identity.json\nprintf 'AIR_DATA_VOLUME=%s\nAWS_DEFAULT_REGION=us-east-1\nAIR_BACKUP_BUCKET=%s\n' \"$VOL_ID\" '${BackupBucket}' > /etc/air/infrastructure.env\ncd /opt/air\ncurl --fail --location --silent --show-error https://sh.rustup.rs -o rustup-init.sh\nRUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo sh rustup-init.sh -y --profile minimal --default-toolchain 1.94.1 --no-modify-path\ntouch /opt/air/bootstrap-ready\n"
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          },
+          {
+            "Key": "Name",
+            "Value": "air-production"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "DataAttachment": {
+      "Type": "AWS::EC2::VolumeAttachment",
+      "Properties": {
+        "Device": "/dev/sdf",
+        "InstanceId": {
+          "Ref": "Server"
+        },
+        "VolumeId": {
+          "Ref": "DataVolume"
+        }
+      }
+    },
+    "Address": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "AddressAssociation": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "Address",
+            "AllocationId"
+          ]
+        },
+        "InstanceId": {
+          "Ref": "Server"
+        }
+      }
+    },
+    "SnapshotRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "dlm.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      }
+    },
+    "DailySnapshots": {
+      "Type": "AWS::DLM::LifecyclePolicy",
+      "Properties": {
+        "Description": "Daily encrypted Air data snapshots retained 35 days",
+        "State": "ENABLED",
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": [
+            "SnapshotRole",
+            "Arn"
+          ]
+        },
+        "PolicyDetails": {
+          "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
+          "ResourceTypes": [
+            "VOLUME"
+          ],
+          "TargetTags": [
+            {
+              "Key": "AirBackup",
+              "Value": "true"
+            }
+          ],
+          "Schedules": [
+            {
+              "Name": "Daily",
+              "CopyTags": true,
+              "CreateRule": {
+                "Interval": 24,
+                "IntervalUnit": "HOURS",
+                "Times": [
+                  "06:00"
+                ]
+              },
+              "RetainRule": {
+                "Count": 35
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "air-server"
+          },
+          {
+            "Key": "Environment",
+            "Value": "production"
+          }
+        ]
+      }
+    },
+    "SystemFailure": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-SystemFailure",
+        "Namespace": "AWS/EC2",
+        "MetricName": "StatusCheckFailed_System",
+        "Dimensions": [
+          {
+            "Name": "InstanceId",
+            "Value": {
+              "Ref": "Server"
+            }
+          }
+        ],
+        "Statistic": "Average",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "missing",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          },
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "HighCPU": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-HighCPU",
+        "Namespace": "AWS/EC2",
+        "MetricName": "CPUUtilization",
+        "Dimensions": [
+          {
+            "Name": "InstanceId",
+            "Value": {
+              "Ref": "Server"
+            }
+          }
+        ],
+        "Statistic": "Average",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "Threshold": 80,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "missing",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "ApplicationDown": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-ApplicationDown",
+        "Namespace": "AirServer",
+        "MetricName": "ApplicationHealthy",
+        "Dimensions": [
+          {
+            "Name": "Service",
+            "Value": "air-production"
+          }
+        ],
+        "Statistic": "Average",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "BackupFailure": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-BackupFailure",
+        "Namespace": "AirServer",
+        "MetricName": "BackupHealthy",
+        "Dimensions": [
+          {
+            "Name": "Service",
+            "Value": "air-production"
+          }
+        ],
+        "Statistic": "Average",
+        "Period": 60,
+        "EvaluationPeriods": 5,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "StorageCapacity": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-StorageCapacity",
+        "Namespace": "AirServer",
+        "MetricName": "DiskUsedPercent",
+        "Dimensions": [
+          {
+            "Name": "Service",
+            "Value": "air-production"
+          }
+        ],
+        "Statistic": "Average",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "Threshold": 80,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "PublicHealthCheck": {
+      "Type": "AWS::Route53::HealthCheck",
+      "Properties": {
+        "HealthCheckConfig": {
+          "Type": "HTTPS",
+          "FullyQualifiedDomainName": "air.orange.me",
+          "Port": 443,
+          "ResourcePath": "/healthz",
+          "FailureThreshold": 3,
+          "RequestInterval": 30,
+          "EnableSNI": true
+        },
+        "HealthCheckTags": [
+          {
+            "Key": "Name",
+            "Value": "air-production-public"
+          }
+        ]
+      }
+    },
+    "PublicEndpointDown": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-PublicEndpointDown",
+        "Namespace": "AWS/Route53",
+        "MetricName": "HealthCheckStatus",
+        "Dimensions": [
+          {
+            "Name": "HealthCheckId",
+            "Value": {
+              "Ref": "PublicHealthCheck"
+            }
+          }
+        ],
+        "Statistic": "Minimum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "CertificateExpiry": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "air-production-CertificateExpiry",
+        "Namespace": "AirServer",
+        "MetricName": "CertificateDaysRemaining",
+        "Dimensions": [
+          {
+            "Name": "Service",
+            "Value": "air-production"
+          }
+        ],
+        "Statistic": "Minimum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "Threshold": 14,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "InstanceId": {
+      "Value": {
+        "Ref": "Server"
+      }
+    },
+    "PublicIP": {
+      "Value": {
+        "Ref": "Address"
+      }
+    },
+    "DataVolumeId": {
+      "Value": {
+        "Ref": "DataVolume"
+      }
+    },
+    "BackupBucket": {
+      "Value": {
+        "Ref": "BackupBucket"
+      }
+    },
+    "AlertTopic": {
+      "Value": {
+        "Ref": "Alerts"
+      }
+    }
+  }
+}

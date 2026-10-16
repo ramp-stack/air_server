@@ -1,0 +1,4 @@
+/target
+/STORAGE*
+/cache*.db*
+*.sw*
