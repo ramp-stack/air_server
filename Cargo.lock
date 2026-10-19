@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "air"
-version = "2.1.0"
+version = "3.0.0"
 dependencies = [
  "chacha20-poly1305",
  "chrono",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "air_server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "air",
  "arc-swap",
