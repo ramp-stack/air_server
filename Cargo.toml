@@ -1,6 +1,6 @@
 [package]
 name = "air_server"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["Caleb Couch <caleb@orange.me>"]
 description = "Resumable encrypted AIR clients and server over WebSocket and TLS"

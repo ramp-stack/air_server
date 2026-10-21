@@ -11,6 +11,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -52,7 +53,35 @@ struct Attachment {
 pub struct Server;
 
 impl Server {
+    pub fn secret(path: &Path) -> Secret {
+        let mut db = SqliteConnection::open(path).unwrap();
+        db.busy_timeout(Duration::from_secs(5)).unwrap();
+        let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS identity(
+                id INTEGER PRIMARY KEY CHECK(id = 0), secret BLOB NOT NULL
+            );",
+        ).unwrap();
+        let saved: Option<Vec<u8>> = transaction.query_row(
+            "SELECT secret FROM identity WHERE id = 0", [], |row| row.get(0),
+        ).optional().unwrap();
+        let secret = saved.map(|bytes| serde_json::from_slice(&bytes).unwrap()).unwrap_or_else(|| {
+            let secret = match std::env::var_os("AIR_SECRET_FILE") {
+                Some(path) => serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap(),
+                None => Secret::new(),
+            };
+            transaction.execute(
+                "INSERT INTO identity(id, secret) VALUES (0, ?1)",
+                [serde_json::to_vec(&secret).unwrap()],
+            ).unwrap();
+            secret
+        });
+        transaction.commit().unwrap();
+        secret
+    }
+
     pub async fn start(secret: Secret) {
+        println!("AIR server: {}", secret.name());
         let (tx, rx) = mpsc::channel(16);
         let worker = StorageWorker {
             cache: Cache::new(secret.clone()),
