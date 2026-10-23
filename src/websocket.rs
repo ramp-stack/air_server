@@ -1,11 +1,7 @@
-use crate::Connection;
 use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use rustls::RootCertStore;
 use rustls::pki_types::ServerName;
-use std::io::Cursor;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -13,15 +9,12 @@ use tokio::time::Instant;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
-use tokio_tungstenite::{
-    WebSocketStream, accept_async_with_config, client_async_with_config,
-};
+use tokio_tungstenite::{WebSocketStream, accept_async_with_config, client_async_with_config};
 use tokio_util::sync::CancellationToken;
-
-type Write = (Vec<u8>, oneshot::Sender<Result<(), String>>);
-
-trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
+use std::io::Cursor;
+use std::sync::Arc;
+use std::time::Duration;
+use crate::Connection;
 
 /// One framed connection accepted by a listener or owned by a client session.
 pub struct Socket {
@@ -47,23 +40,18 @@ impl Socket {
         tokio::spawn(async move {
             let reading = async {
                 loop {
-                    let frame = tokio::time::timeout(
-                        Duration::from_secs(90),
-                        stream.next(),
-                    )
-                    .await
-                    .map_err(|_| "websocket peer stopped responding")?
-                    .ok_or("websocket closed")?
-                    .map_err(|error| error.to_string())?;
+                    let frame = tokio::time::timeout(Duration::from_secs(90), stream.next())
+                        .await
+                        .map_err(|_| "websocket peer stopped responding")?
+                        .ok_or("websocket closed")?
+                        .map_err(|error| error.to_string())?;
                     match frame {
                         Message::Binary(bytes) => incoming
                             .send(bytes.to_vec())
                             .await
                             .map_err(|_| "websocket reader dropped")?,
                         Message::Ping(_) => reader_pong.notify_one(),
-                        Message::Close(_) => {
-                            return Err("websocket peer closed".to_string());
-                        }
+                        Message::Close(_) => { return Err("websocket peer closed".to_string()); }
                         _ => {}
                     }
                 }
@@ -72,9 +60,7 @@ impl Socket {
                 _ = reader_cancel.cancelled() => return,
                 result = reading => result,
             };
-            if let Err(error) = result {
-                let _ = reader_failure.send(error);
-            }
+            if let Err(error) = result { let _ = reader_failure.send(error); }
             reader_cancel.cancel();
         });
         let writer_cancel = cancel.clone();
@@ -84,9 +70,7 @@ impl Socket {
                     Instant::now() + Duration::from_secs(30),
                     Duration::from_secs(30),
                 );
-                heartbeat.set_missed_tick_behavior(
-                    tokio::time::MissedTickBehavior::Skip,
-                );
+                heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     let (message, reply) = tokio::select! {
                         command = outgoing.recv() => {
@@ -95,24 +79,19 @@ impl Socket {
                             (Some(Message::Binary(bytes.into())), Some(reply))
                         }
                         _ = pong.notified() => (None, None),
-                        _ = heartbeat.tick() => {
-                            (Some(Message::Ping(Vec::new().into())), None)
-                        },
+                        _ = heartbeat.tick() => { (Some(Message::Ping(Vec::new().into())), None) },
                     };
-                    let result =
-                        tokio::time::timeout(Duration::from_secs(10), async {
-                            match message {
-                                Some(message) => sink.send(message).await,
-                                None => sink.flush().await,
-                            }
-                            .map_err(|error| error.to_string())
-                        })
-                        .await
-                        .map_err(|_| "websocket write timed out".to_string())
-                        .and_then(|result| result);
-                    if let Some(reply) = reply {
-                        let _ = reply.send(result.clone());
-                    }
+                    let result = tokio::time::timeout(Duration::from_secs(10), async {
+                        match message {
+                            Some(message) => sink.send(message).await,
+                            None => sink.flush().await,
+                        }
+                        .map_err(|error| error.to_string())
+                    })
+                    .await
+                    .map_err(|_| "websocket write timed out".to_string())
+                    .and_then(|result| result);
+                    if let Some(reply) = reply { let _ = reply.send(result.clone()); }
                     result?;
                 }
             };
@@ -120,9 +99,7 @@ impl Socket {
                 _ = writer_cancel.cancelled() => return,
                 result = writing => result,
             };
-            if let Err(error) = result {
-                let _ = failure.send(error);
-            }
+            if let Err(error) = result { let _ = failure.send(error); }
             writer_cancel.cancel();
         });
         Self { incoming: rx, outgoing: tx, failure: error, cancel }
@@ -133,14 +110,13 @@ impl Socket {
     }
 
     pub async fn listen_tls(sockets: mpsc::Sender<Self>) -> Result<(), String> {
-        let cert_path = std::env::var("AIR_TLS_CERT")
-            .map_err(|_| "AIR_TLS_CERT is not configured")?;
-        let key_path = std::env::var("AIR_TLS_KEY")
-            .map_err(|_| "AIR_TLS_KEY is not configured")?;
-        let cert_bytes = std::fs::read(cert_path)
-            .map_err(|e| format!("read TLS certificate: {e}"))?;
-        let key_bytes = std::fs::read(key_path)
-            .map_err(|e| format!("read TLS private key: {e}"))?;
+        let cert_path =
+            std::env::var("AIR_TLS_CERT").map_err(|_| "AIR_TLS_CERT is not configured")?;
+        let key_path = std::env::var("AIR_TLS_KEY").map_err(|_| "AIR_TLS_KEY is not configured")?;
+        let cert_bytes =
+            std::fs::read(cert_path).map_err(|e| format!("read TLS certificate: {e}"))?;
+        let key_bytes =
+            std::fs::read(key_path).map_err(|e| format!("read TLS private key: {e}"))?;
         let certs = rustls_pemfile::certs(&mut Cursor::new(cert_bytes))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("parse TLS certificate: {e}"))?;
@@ -156,19 +132,15 @@ impl Socket {
         Self::serve(sockets, Some(acceptor)).await
     }
 
-    async fn serve(
-        sockets: mpsc::Sender<Self>,
-        tls: Option<TlsAcceptor>,
-    ) -> Result<(), String> {
+    async fn serve(sockets: mpsc::Sender<Self>, tls: Option<TlsAcceptor>) -> Result<(), String> {
         let (method, variable, default) = if tls.is_some() {
             ("wss", "AIR_TLS_ADDR", "0.0.0.0:443")
         } else {
             ("ws", "AIR_WS_ADDR", "0.0.0.0:5702")
         };
         let addr = std::env::var(variable).unwrap_or_else(|_| default.into());
-        let listener = TcpListener::bind(&addr)
-            .await
-            .map_err(|e| format!("bind {method} {addr}: {e}"))?;
+        let listener =
+            TcpListener::bind(&addr).await.map_err(|e| format!("bind {method} {addr}: {e}"))?;
         println!("air {method}://{addr}");
         let mut pending = FuturesUnordered::new();
         loop {
@@ -215,9 +187,7 @@ impl Socket {
                 result = pending.next(), if !pending.is_empty() => {
                     match result {
                         Some(Ok(socket)) => {
-                            if sockets.send(socket).await.is_err() {
-                                return Ok(());
-                            }
+                            if sockets.send(socket).await.is_err() { return Ok(()); }
                         }
                         Some(Err(e)) => eprintln!("air {method} handshake: {e}"),
                         None => {}
@@ -243,10 +213,8 @@ impl Connection for Socket {
             .ok_or("websocket URL has no host")?
             .trim_matches(['[', ']'])
             .to_owned();
-        let port = request
-            .uri()
-            .port_u16()
-            .ok_or("websocket URL requires an explicit valid port")?;
+        let port =
+            request.uri().port_u16().ok_or("websocket URL requires an explicit valid port")?;
         let tls = if secure {
             let _ = rustls::crypto::ring::default_provider().install_default();
             let mut roots = RootCertStore::empty();
@@ -254,32 +222,22 @@ impl Connection for Socket {
             if let Ok(path) = std::env::var("AIR_TLS_CERT") {
                 let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
                 for cert in rustls_pemfile::certs(&mut Cursor::new(bytes)) {
-                    roots
-                        .add(cert.map_err(|e| e.to_string())?)
-                        .map_err(|e| e.to_string())?;
+                    roots.add(cert.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
                 }
             }
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+            let config =
+                rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
             Some(TlsConnector::from(Arc::new(config)))
         } else {
             None
         };
         tokio::time::timeout(Duration::from_secs(10), async {
-            let tcp = TcpStream::connect((host.as_str(), port))
-                .await
-                .map_err(|e| e.to_string())?;
+            let tcp = TcpStream::connect((host.as_str(), port)).await.map_err(|e| e.to_string())?;
             tcp.set_nodelay(true).map_err(|e| e.to_string())?;
             let io: Box<dyn Io> = match tls {
                 Some(tls) => {
-                    let name = ServerName::try_from(host.to_owned())
-                        .map_err(|e| e.to_string())?;
-                    Box::new(
-                        tls.connect(name, tcp)
-                            .await
-                            .map_err(|e| e.to_string())?,
-                    )
+                    let name = ServerName::try_from(host.to_owned()).map_err(|e| e.to_string())?;
+                    Box::new(tls.connect(name, tcp).await.map_err(|e| e.to_string())?)
                 }
                 None => Box::new(tcp),
             };
@@ -287,10 +245,9 @@ impl Connection for Socket {
             let config = WebSocketConfig::default()
                 .max_message_size(Some(17 * 1024 * 1024))
                 .max_frame_size(Some(17 * 1024 * 1024));
-            let (websocket, _) =
-                client_async_with_config(request, io, Some(config))
-                    .await
-                    .map_err(|e| e.to_string())?;
+            let (websocket, _) = client_async_with_config(request, io, Some(config))
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(Self::from_websocket(websocket))
         })
         .await
@@ -320,7 +277,10 @@ impl Connection for Socket {
 }
 
 impl Drop for Socket {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-    }
+    fn drop(&mut self) { self.cancel.cancel(); }
 }
+
+type Write = (Vec<u8>, oneshot::Sender<Result<(), String>>);
+
+trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}

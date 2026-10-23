@@ -33,33 +33,18 @@ pub enum ServerMessage {
 }
 
 impl ServerMessage {
-    pub fn encode(
-        &self,
-        secret: &Secret,
-        context: Id,
-    ) -> Result<Vec<u8>, String> {
-        let signature =
-            secret.sign(Id::hash(&("air-session-v1", context, self)));
-        postcard::to_allocvec(&(signature, self))
-            .map_err(|error| error.to_string())
+    pub fn encode(&self, secret: &Secret, context: Id) -> Result<Vec<u8>, String> {
+        let signature = secret.sign(Id::hash(&("air-session-v1", context, self)));
+        postcard::to_allocvec(&(signature, self)).map_err(|error| error.to_string())
     }
 
-    pub fn decode(
-        bytes: &[u8],
-        identity: &Identity,
-        context: Id,
-    ) -> Result<Self, String> {
-        let (signature, message): (Signature, Self) =
-            match postcard::take_from_bytes(bytes) {
-                Ok((message, [])) => message,
-                _ => return Err("invalid server session message".into()),
-            };
+    pub fn decode(bytes: &[u8], identity: &Identity, context: Id) -> Result<Self, String> {
+        let (signature, message): (Signature, Self) = match postcard::take_from_bytes(bytes) {
+            Ok((message, [])) => message,
+            _ => return Err("invalid server session message".into()),
+        };
         signature
-            .verify(
-                identity,
-                &[],
-                Id::hash(&("air-session-v1", context, &message)),
-            )
+            .verify(identity, &[], Id::hash(&("air-session-v1", context, &message)))
             .map_err(|error| error.to_string())?;
         Ok(message)
     }

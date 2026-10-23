@@ -102,11 +102,21 @@ including session tables, rather than copying only application records.
 
 ## Server
 
-Run with a JSON server identity in `AIR_SECRET_FILE`:
+Run the server with:
 
 ```sh
-AIR_SECRET_FILE=/path/to/identity.json cargo run --release
+cargo run --release
 ```
+
+At startup it loads its identity from the SQLite file selected by `AIR_STORAGE` (default
+`STORAGE.db`), creates and stores a new secret only when the identity row is missing, and prints
+its public AIR name for connections. Identity initialization uses a transaction so concurrent
+first starts cannot generate different saved identities. A corrupt stored identity is an error;
+it is never silently replaced. Keep this database to retain the server's name.
+
+To preserve an existing deployment's JSON identity, set `AIR_SECRET_FILE` on the first startup.
+It is imported only when the SQLite identity is absent; later starts use the saved SQLite secret.
+`Server::secret(path)` also exposes this initialization for other AIR services.
 
 | Variable | Default / purpose |
 | --- | --- |
