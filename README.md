@@ -2,8 +2,9 @@
 
 The transport is based on the original client, server, and websocket in
 [`ramp-stack/air` at `176a96b`](https://github.com/ramp-stack/air/tree/176a96b06a92f654aed34f3803231f218e747cdb/src).
-The sibling `../air` library supplies the unchanged identity, encryption,
-request, and storage types.
+AIR 4 supplies the identity, encryption, request, and storage types. Version 2 of this
+crate uses those public types while preserving the existing transport protocol. The
+manifest keeps a sibling `../air` path for development and a registry version for releases.
 
 ## Client
 
