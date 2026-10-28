@@ -302,7 +302,7 @@ impl StorageWorker {
                             })
                         }
                         action => {
-                            if !self.attachments.get(&key).is_some_and(|entry| entry.owner == owner)
+                            if self.attachments.get(&key).is_none_or(|entry| entry.owner != owner)
                             {
                                 Err("session connection was replaced".into())
                             } else {
@@ -701,22 +701,18 @@ impl Cache {
             )),
             None => None,
         };
-        if previous.is_none() {
-            if let DBRequest::Write(time, signed) = request {
-                db.execute(
-                    "INSERT INTO private(
-                        key, key_signature, timestamp, payload
-                     ) VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        key,
-                        postcard::to_allocvec(&signed.signature)
-                            .map_err(|error| error.to_string())?,
-                        postcard::to_allocvec(time).map_err(|error| error.to_string())?,
-                        &signed.payload,
-                    ],
-                )
-                .map_err(|error| error.to_string())?;
-            }
+        if previous.is_none() && let DBRequest::Write(time, signed) = request {
+            db.execute(
+                "INSERT INTO private(
+                    key, key_signature, timestamp, payload
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    key,
+                    postcard::to_allocvec(&signed.signature).map_err(|error| error.to_string())?,
+                    postcard::to_allocvec(time).map_err(|error| error.to_string())?,
+                    &signed.payload,
+                ],
+            ).map_err(|error| error.to_string())?;
         }
         Ok(previous)
     }

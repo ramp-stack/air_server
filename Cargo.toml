@@ -1,6 +1,6 @@
 [package]
 name = "air_server"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 authors = ["Caleb Couch <caleb@orange.me>"]
 description = "Resumable encrypted AIR clients and server over WebSocket and TLS"
@@ -11,11 +11,8 @@ include = ["/src/**/*.rs", "/Cargo.toml", "/Cargo.lock", "/README.md"]
 
 [dependencies]
 serde = {version="1.0", features=["derive"]}
-air = {version = "4.0.0", path = "../air"}
-easy_secp256k1 = "0.1.0"
-secp256k1 = {version="0.31.1"}
-hex = "0.4.3"
-tokio = {version="1.44.2", features=["rt-multi-thread", "macros", "net", "time", "io-util"]}
+air = {version = "4.0.1", path = "../air"}
+tokio = {version="1.44.2", features=["rt-multi-thread", "macros", "net", "time", "io-util", "sync"]}
 serde_json = "1.0.145"
 rusqlite = {version="0.39.0", features=["bundled"]}
 
@@ -27,15 +24,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 rustls-pemfile = "2"
 webpki-roots = "0.26"
 
-futures-util = "0.3.32"
+futures-util = {version = "0.3.32", default-features = false, features = ["std", "sink"]}
 postcard = {version="1.1.3", features = ["alloc"]}
-axum = {version="0.8.9", features=["ws"]}
-im = {version="15.1.0", features=["serde"]}
-arc-swap = {version="1.9.1", features=["serde"]}
-postage = "0.5.0"
 tokio-util = {version="0.7.18", features=["rt"]}
-futures = "0.3.33"
 
 [dev-dependencies]
-air = {version = "4.0.0", path = "../air", features = ["local"]}
-rcgen = "0.13"
+air = {version = "4.0.1", path = "../air", features = ["local"]}
